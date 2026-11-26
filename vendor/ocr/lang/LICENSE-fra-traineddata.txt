@@ -1,0 +1,3 @@
+fra.traineddata.gz : modèle de reconnaissance du français pour Tesseract (version 4.0.0_best_int),
+distribué par le paquet npm @tesseract.js-data/fra 1.0.0 (licence MIT, https://github.com/naptha/tessdata),
+issu du projet tessdata de Tesseract OCR (licence Apache 2.0, https://github.com/tesseract-ocr/tessdata_best).

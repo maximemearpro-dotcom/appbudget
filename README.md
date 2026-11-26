@@ -5,12 +5,15 @@ Chaque personne crée son compte et ne voit que ses propres données.
 
 ## Fonctions
 
-- Budget du mois : revenus, charges fixes (avec jour de prélèvement), budgets variables, objectif d'épargne, marge de sécurité.
+- Budget du mois : revenus, charges fixes (avec jour de prélèvement), budgets par poste, objectif d'épargne, marge de sécurité.
 - Saisie rapide d'une dépense (montant, catégorie, date), saisie express en une phrase (« courses 23,50 carrefour »), dictée quand le navigateur la permet.
 - Alerte immédiate en cas de dépassement d'un budget.
-- Onglets Mois, Graphiques, Opérations et Bilan sur 12 mois.
 - Échéancier des prélèvements et solde « vraiment disponible » après recalage avec le solde bancaire.
-- Photos de fond personnelles (stockées dans un dossier privé) et illustrations de saison par défaut.
+- Projets d'épargne : objectif, date cible, montant conseillé par mois, versements et retraits (comptés, si on le souhaite, comme épargne du mois).
+- Abonnements : coût par mois et par an, prochains prélèvements, reprise du total dans le budget.
+- Onglets Mois, Opérations, Projets et Analyse (graphiques du mois et bilan sur 12 mois).
+- Thème clair, sombre ou automatique ; écran de bienvenue pour les nouveaux comptes.
+- Photos du bandeau personnelles (dossier privé) et illustrations de saison par défaut.
 - Export CSV compatible Excel, suppression du compte et de toutes les données.
 
 ## Structure
@@ -19,7 +22,8 @@ Chaque personne crée son compte et ne voit que ses propres données.
 |---|---|
 | `index.html` | L'application complète |
 | `config.js` | Adresse et clé publique du projet Supabase (à remplir) |
-| `supabase/schema.sql` | Tables, règles de sécurité, stockage des photos, suppression de compte |
+| `supabase/schema.sql` | Installation complète : tables, règles de sécurité, stockage des photos, suppression de compte |
+| `supabase/migration_v2.sql` | Mise à jour d'une base existante vers la version 2 (projets, abonnements) |
 | `manifest.webmanifest`, `icons/` | Installation sur l'écran d'accueil |
 | `vendor/supabase.js` | Bibliothèque supabase-js 2.118.0 (licence MIT, voir `vendor/LICENSE-supabase-js.txt`) |
 | `photos/` | Illustrations de fond par saison |
@@ -34,5 +38,5 @@ Chaque personne crée son compte et ne voit que ses propres données.
 ## Crédits
 
 - Illustrations de fond : images générées par IA, issues de la banque d'images libre de droits [smithable-images](https://github.com/smithable/smithable-images) (licence CC0). Ce ne sont pas de vraies photographies.
-- Polices Fraunces et Manrope (Google Fonts, licence SIL Open Font).
+- Police Manrope (Google Fonts, licence SIL Open Font).
 - [supabase-js](https://github.com/supabase/supabase-js) (licence MIT).

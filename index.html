@@ -607,7 +607,9 @@ function errMsg(e){
   if (c === "invalid_argument") return "Enregistrement refusé : élément introuvable.";
   if (c === "session_expired") return "Session expirée : reconnectez-vous.";
   if (c === "resource_exhausted") return "Trop de demandes d'un coup : réessayez dans quelques secondes.";
-  return "Connexion impossible pour l'instant : réessayez.";
+  if (e && (e.pg === "42501" || /permission denied/i.test(e.message || ""))) return "Accès refusé par la base de données : un réglage Supabase est à corriger (droits d'accès).";
+  if (e && (e.pg === "PGRST205" || /could not find the table/i.test(e.message || ""))) return "Table introuvable : le script d'installation Supabase n'a pas été exécuté en entier.";
+  return "Connexion impossible pour l'instant : réessayez." + (e && e.message && !/fetch|network/i.test(e.message) ? " (" + String(e.message).slice(0, 120) + ")" : "");
 }
 function toast(msg, undo, level){
   $("tMsg").textContent = msg; undoFn = undo || null; $("tUndo").hidden = !undo;
@@ -1473,7 +1475,7 @@ function makeDb(uid){
   const listeners = new Set();
   const snapDoc = (id, data) => ({id, exists:data !== undefined && data !== null, data:() => data === null ? undefined : data, metadata:{fromCache:false, hasPendingWrites:false}});
   const snapCol = docs => ({docs, size:docs.length, empty:!docs.length, docChanges:() => [], metadata:{fromCache:false, hasPendingWrites:false}});
-  const fail = error => { throw {code:error && (error.code === "PGRST301" || error.status === 401) ? "session_expired" : "unavailable", message:error && error.message}; };
+  const fail = error => { console.error("Supabase :", error); throw {code:error && (error.code === "PGRST301" || error.status === 401) ? "session_expired" : "unavailable", pg:error && error.code, message:error && error.message}; };
   async function readCol(path){
     const p = path.split("/");
     if (p.length === 1 && p[0] === "months"){

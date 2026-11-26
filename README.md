@@ -11,7 +11,7 @@ Chaque personne crée son compte et ne voit que ses propres données.
 - Échéancier des prélèvements et solde « vraiment disponible » après recalage avec le solde bancaire.
 - Projets d'épargne : objectif, date cible, montant conseillé par mois, versements et retraits (comptés, si on le souhaite, comme épargne du mois).
 - Abonnements : coût par mois et par an, prochains prélèvements, reprise du total dans le budget.
-- Onglets Mois, Opérations, Projets et Analyse (graphiques du mois et bilan sur 12 mois).
+- Onglets Accueil (catégories à toucher pour saisir, répartition des dépenses), Évolution (jour par jour, par catégorie, bilan sur 12 mois), Opérations (par jour, solde du compte), Budget (budgets par catégorie, calcul de l'épargne, prélèvements) et Projets.
 - Thème clair, sombre ou automatique ; écran de bienvenue pour les nouveaux comptes.
 - Photos du bandeau personnelles (dossier privé) et illustrations de saison par défaut.
 - Export CSV compatible Excel, suppression du compte et de toutes les données.

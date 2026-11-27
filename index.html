@@ -506,6 +506,9 @@ body.veil .wrap,body.veil .top{filter:blur(18px)}
 .legal p:last-child{margin-bottom:0}
 .legal a{color:var(--brand);font-weight:700}
 .textbtn.inl{display:inline;min-height:0;padding:0;font-size:inherit}
+.vh{position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;border:0;opacity:0;overflow:hidden;clip:rect(0 0 0 0);pointer-events:none}
+label.ibtn{cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ibtn.busy{opacity:.5;pointer-events:none}
 .bkrow{display:grid;gap:0}
 </style>
 </head>
@@ -661,8 +664,8 @@ body.veil .wrap,body.veil .top{filter:blur(18px)}
     <div class="ph"><h2 id="addTitle">Nouvelle opération</h2><button class="x" data-close="addSheet" aria-label="Fermer">×</button></div>
     <div class="express">
       <input id="aExpr" placeholder="Tapez ou dictez : courses 23,50" autocomplete="off" aria-label="Saisie express : une phrase avec la catégorie et le montant">
-      <button class="ibtn" id="aCam" hidden aria-label="Photographier un ticket"><i data-ico="camera"></i></button>
-      <input type="file" id="aFile" accept="image/*" hidden>
+      <label class="ibtn" id="aCam" for="aFile" hidden role="button" tabindex="0" aria-label="Photographier un ticket"><i data-ico="camera"></i></label>
+      <input type="file" id="aFile" accept="image/*" class="vh" tabindex="-1" aria-hidden="true">
       <button class="mic" id="aMic" hidden aria-label="Dicter"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg></button>
     </div>
     <div class="heard"><img class="thumb" id="aThumb" alt="" hidden><span class="spin" id="aSpin" hidden></span><span id="aHeard"></span></div>
@@ -778,7 +781,7 @@ body.veil .wrap,body.veil .top{filter:blur(18px)}
       <button class="btn danger" id="acDelete">Supprimer mon compte et mes données</button>
       <p class="err" id="acErr" style="margin-top:8px"></p>
     </div>
-    <p class="foot center">Mon budget · version 4</p>
+    <p class="foot center">Mon budget · version 4.1</p>
   </div>
 </div>
 
@@ -1718,7 +1721,7 @@ function setThumb(blob){
 }
 function stopPhoto(){
   photoTok = null;
-  setThumb(null); $("aSpin").hidden = true; $("aCam").disabled = false;
+  setThumb(null); $("aSpin").hidden = true; setCamBusy(false);
 }
 /* ---------- recalage du solde ---------- */
 async function saveRecal(e){
@@ -2628,7 +2631,7 @@ async function bioCheck(id){
   await navigator.credentials.get({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)), allowCredentials:[{type:"public-key", id:unb64(id)}], userVerification:"required", timeout:60000}});
   return true;
 }
-let lockPin = "", hiddenAt = 0, pinFlow = null, lockBusy = false, forgotArm = false;
+let lockPin = "", hiddenAt = 0, pinFlow = null, lockBusy = false, forgotArm = false, pickingAt = 0;
 const isLocked = () => !$("lock").hidden;
 const lockTries = () => Number(store.get("lockTries")) || 0;
 function drawDots(el, n){ el.innerHTML = [0, 1, 2, 3].map(i => `<i class="${i < n ? "on" : ""}"></i>`).join(""); }
@@ -2712,7 +2715,11 @@ async function signOutAll(){
 document.addEventListener("visibilitychange", () => {
   const c = lockCfg(), mine = c && me && c.uid === me.id;
   if (document.visibilityState === "hidden"){ hiddenAt = Date.now(); if (mine) document.body.classList.add("veil"); }
-  else { document.body.classList.remove("veil"); if (mine && hiddenAt && Date.now() - hiddenAt >= (c.delay ?? 60) * 1000) showLock(); }
+  else {
+    document.body.classList.remove("veil");
+    const picking = pickingAt && Date.now() - pickingAt < 5 * 60000; pickingAt = 0; // retour de l'appareil photo : pas de code
+    if (mine && !picking && hiddenAt && Date.now() - hiddenAt >= (c.delay ?? 60) * 1000) showLock();
+  }
 });
 
 /* ---------- sauvegarde complète et restauration ---------- */
@@ -2834,6 +2841,7 @@ function openLegal(){ drawLegal(); $("toast").hidden = true; $("legal").hidden =
 
 /* ---------- photo du ticket : lecture sur l'appareil (Tesseract.js, open source) ---------- */
 let ocrWorker = null, ocrLoading = null, photoTok = null, ocrProgress = null;
+function setCamBusy(on){ $("aFile").disabled = on; $("aCam").classList.toggle("busy", on); $("aCam").setAttribute("aria-disabled", on ? "true" : "false"); }
 const loadScript = src => new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("script")); document.head.append(s); });
 async function getOcr(progress){
   ocrProgress = progress;
@@ -2911,7 +2919,7 @@ function prepOcr(blob){
 }
 async function readTicket(file){
   const tok = {}; photoTok = tok;
-  $("aErr").textContent = ""; $("aCam").disabled = true; $("aSpin").hidden = false; $("aHeard").textContent = "Préparation de la photo…";
+  $("aErr").textContent = ""; setCamBusy(true); $("aSpin").hidden = false; $("aHeard").textContent = "Préparation de la photo…";
   try {
     const blob = await shrink(file, 2000, .92); if (photoTok !== tok) return; setThumb(blob);
     const w = await getOcr(m => {
@@ -2926,7 +2934,7 @@ async function readTicket(file){
   } catch(e){
     console.error(e);
     if (photoTok === tok) $("aHeard").textContent = !ocrWorker && !navigator.onLine ? "La première lecture demande une connexion Internet (téléchargement du lecteur)." : "Lecture impossible : réessayez avec une photo nette, à plat et bien éclairée.";
-  } finally { if (photoTok === tok){ $("aCam").disabled = false; $("aSpin").hidden = true; } }
+  } finally { if (photoTok === tok){ setCamBusy(false); $("aSpin").hidden = true; } }
 }
 function applyTicket(r){
   if (kind !== "depense") setKind("depense");
@@ -2968,7 +2976,6 @@ $("gal").addEventListener("click", e => {
 $("pFile").addEventListener("change", () => { const f = $("pFile").files && $("pFile").files[0]; $("pFile").value = ""; if (f) addPhoto(f); });
 $("pMode").addEventListener("click", e => { const b = e.target.closest("[data-m]"); if (!b || !db) return; saveLook({mode:b.dataset.m}, $("pErr")); });
 $("defToggle").addEventListener("click", () => { if (!db) return; saveLook({defaults:look.defaults === false}, $("pErr")); });
-$("aCam").onclick = () => $("aFile").click();
 $("aFile").addEventListener("change", () => { const f = $("aFile").files && $("aFile").files[0]; $("aFile").value = ""; if (f) readTicket(f); });
 $("recalBtn").onclick = () => { $("recalForm").hidden = false; $("recalAmt").value = ""; $("recalAmt").focus(); };
 $("recalNo").onclick = () => { $("recalForm").hidden = true; };
@@ -3086,6 +3093,8 @@ document.querySelector(".wrap").addEventListener("keydown", e => {
 
 /* événements v4 */
 $("lkPad").innerHTML = padHtml(); $("psPad").innerHTML = padHtml();
+$("aCam").addEventListener("click", () => { pickingAt = Date.now(); });
+$("aCam").addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && !$("aFile").disabled){ e.preventDefault(); pickingAt = Date.now(); $("aFile").click(); } });
 $("dueAll").onclick = () => { const keys = dueShown().map(x => x.key); if (keys.length){ $("dueAll").disabled = true; confirmDue(keys).finally(() => { $("dueAll").disabled = false; }); } };
 $("autoSeg").addEventListener("click", async e => { const b = e.target.closest("[data-a]"); if (!b || !db) return; if (await saveLook({autoMode:b.dataset.a})){ syncAutoSeg(); render(); } });
 $("lkPad").addEventListener("click", e => { const b = e.target.closest("[data-k]"); if (b) lockKey(b.dataset.k); });

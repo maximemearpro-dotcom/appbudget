@@ -1,9 +1,9 @@
-/* Mon budget : service worker (fonctionnement hors connexion).
-   - Garde une copie de l'application sur le téléphone pour pouvoir l'ouvrir sans réseau.
-   - La page et config.js sont toujours demandés d'abord à Internet (pour recevoir les mises à jour),
-     avec la copie en secours si le réseau ne répond pas.
+/* Mon budget : service worker (version 5).
+   - L'appli s'ouvre tout de suite avec la copie gardée sur le téléphone, même sans réseau.
+   - En arrière-plan, la page et config.js sont redemandés à Internet ; si une nouvelle version
+     est en ligne, l'appli affiche « Une nouvelle version est prête » (un toucher pour l'installer).
    - Les échanges avec Supabase (vos données) ne passent jamais par ici. */
-const CACHE = "mon-budget-v4";
+const CACHE = "mon-budget-v5";
 const CORE = [
   "./", "index.html", "config.js", "manifest.webmanifest",
   "vendor/supabase.js", "vendor/fonts/manrope-latin.woff2", "vendor/fonts/manrope-latin-ext.woff2",
@@ -18,38 +18,48 @@ self.addEventListener("activate", e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith("mon-budget-") && k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
-function fromNetwork(req, ms){
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("lent")), ms);
-    fetch(req).then(r => { clearTimeout(t); resolve(r); }, err => { clearTimeout(t); reject(err); });
-  });
+const META = () => new URL("__maj", self.registration.scope).href; // « une nouvelle version attend »
+async function tellUpdate(){
+  const cs = await self.clients.matchAll({type:"window", includeUncontrolled:true});
+  cs.forEach(c => c.postMessage({type:"update"}));
 }
 
 self.addEventListener("fetch", e => {
   const req = e.request, url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
-  const fresh = req.mode === "navigate" || /\/(index\.html|config\.js)?$/.test(url.pathname) || url.pathname.endsWith("/config.js") || url.pathname.endsWith("/sw.js");
-  if (fresh){
-    // d'abord Internet (4 s maximum), sinon la copie gardée sur le téléphone
+  const isPage = req.mode === "navigate" || /\/(index\.html)?$/.test(url.pathname);
+  const isCfg = url.pathname.endsWith("/config.js");
+  if (isPage || isCfg){
+    const key = isPage ? new URL("index.html", self.registration.scope).href : url.origin + url.pathname;
     e.respondWith((async () => {
       const cache = await caches.open(CACHE);
-      try {
-        const r = await fromNetwork(req, 4000);
-        if (r && r.ok) cache.put(req.mode === "navigate" ? "index.html" : req, r.clone());
+      if (req.mode === "navigate") await cache.delete(META()); // cette ouverture affiche la dernière version gardée
+      const hit = await cache.match(key), oldText = hit ? hit.clone().text() : null;
+      // en arrière-plan : la version en ligne (sans passer par le cache du navigateur)
+      const fresh = fetch(new Request(key, {cache:"no-cache", credentials:"same-origin"})).then(async r => {
+        if (!r || !r.ok) return r;
+        const txt = await r.clone().text(), old = oldText ? await oldText : null;
+        await cache.put(key, r.clone());
+        if (old !== null && old !== txt){ await cache.put(META(), new Response("1")); await tellUpdate(); }
         return r;
-      } catch(err){
-        return (await cache.match(req, {ignoreSearch:true})) || (await cache.match("index.html")) || Response.error();
-      }
+      });
+      if (hit){ e.waitUntil(fresh.catch(() => {})); return hit; }
+      try { return await fresh; } catch(err){ return (await cache.match(new URL("index.html", self.registration.scope).href)) || Response.error(); }
     })());
     return;
   }
   // le reste (police, icônes, photos, lecteur de tickets) : la copie si elle existe, sinon Internet puis on la garde
   e.respondWith((async () => {
-    const cache = await caches.open(CACHE);
-    const hit = await cache.match(req, {ignoreSearch:true});
+    const cache = await caches.open(CACHE), hit = await cache.match(req, {ignoreSearch:true});
     if (hit) return hit;
     const r = await fetch(req);
     if (r && r.ok && r.type === "basic") cache.put(req, r.clone());
     return r;
   })());
+});
+
+// la page demande, une fois chargée, si une nouvelle version attend
+self.addEventListener("message", e => {
+  if (!e.data || e.data.type !== "check") return;
+  e.waitUntil(caches.open(CACHE).then(c => c.match(META())).then(m => { if (m && e.source) e.source.postMessage({type:"update"}); }));
 });

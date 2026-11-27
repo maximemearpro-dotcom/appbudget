@@ -600,6 +600,17 @@ body.nohelp .help{display:none!important}
 .rfr{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
 .carry{font-style:normal;color:var(--brand);font-weight:700}
 .rfok{min-height:32px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font-weight:800;font-size:13px}
+
+/* ---------- v5.1 : réinitialiser un mois ---------- */
+.rsmonth{display:grid;grid-template-columns:48px minmax(0,1fr) 48px;align-items:center;margin:4px 0 14px;padding:4px;border:1px solid var(--line2);border-radius:999px;background:var(--card)}
+.rsmonth b{text-align:center;font-size:17px;font-weight:800;text-transform:capitalize}
+.rsmonth .mnav{width:48px;height:48px}
+.rsinfo{margin:0 0 14px;padding:14px 16px;border-radius:var(--r);background:var(--grid);font-weight:600;line-height:1.5}
+.rsinfo b{font-weight:800}
+.rsopt span small{display:block;font-size:13px;font-weight:600;color:var(--mute)}
+.rsopt{align-items:flex-start}.rsopt input{margin-top:2px}
+#bReset{display:block;margin:14px auto 0;color:var(--mute)}
+#rsGo.armed{background:var(--neg);border-color:var(--neg);color:#fff}
 </style>
 </head>
 <body data-tab="accueil" data-an="mois">
@@ -730,6 +741,7 @@ body.nohelp .help{display:none!important}
       <div class="card tapcard" id="subsCard" hidden role="button" tabindex="0"></div>
     </div>
     <button class="primary" id="editBudget"><i data-ico="pencil"></i>Modifier le budget du mois</button>
+    <button class="textbtn" id="bReset" hidden>Réinitialiser ce mois…</button>
   </section>
 
   <!-- PROJETS -->
@@ -866,6 +878,7 @@ body.nohelp .help{display:none!important}
       <button class="mrow" id="acGuide"><span class="cic t-gold"><i data-ico="info"></i></span>Revoir le guide de bienvenue<i data-ico="chevR"></i></button>
       <button class="mrow" id="acExport"><span class="cic t-blue"><i data-ico="download"></i></span>Exporter mes opérations (CSV, pour Excel)<i data-ico="chevR"></i></button>
       <button class="mrow" id="copyXl"><span class="cic t-green"><i data-ico="copy"></i></span>Copier le mois pour Excel<i data-ico="chevR"></i></button>
+      <button class="mrow" id="acReset"><span class="cic t-terra"><i data-ico="trash"></i></span>Réinitialiser un mois<i data-ico="chevR"></i></button>
     </div>
     <div class="card"><p class="small" style="margin:0">Connecté avec</p><p id="acEmail" style="margin:2px 0 0;font-weight:800"></p><button class="btn" id="acOut"><i data-ico="logout"></i>Se déconnecter</button></div>
     <div class="card menu">
@@ -877,7 +890,7 @@ body.nohelp .help{display:none!important}
       <button class="btn danger" id="acDelete">Supprimer mon compte et mes données</button>
       <p class="err" id="acErr" style="margin-top:8px"></p>
     </div>
-    <p class="foot center">Mon budget · version 5</p>
+    <p class="foot center">Mon budget · version 5.1</p>
   </div>
 </div>
 
@@ -980,6 +993,20 @@ body.nohelp .help{display:none!important}
     <p class="err" id="rfErr"></p>
     <button class="primary" id="rfSave">Enregistrer</button>
     <button class="btn danger" id="rfDel" hidden>Supprimer</button>
+  </div>
+</div>
+
+<div class="sheet" id="resetSheet" hidden role="dialog" aria-modal="true" aria-labelledby="rsTitle">
+  <div class="panel">
+    <div class="ph"><h2 id="rsTitle">Réinitialiser un mois</h2><button class="x" data-close="resetSheet" aria-label="Fermer">×</button></div>
+    <div class="rsmonth"><button class="mnav" id="rsPrev" aria-label="Mois précédent"><i data-ico="chevL"></i></button><b id="rsLabel" aria-live="polite"></b><button class="mnav" id="rsNext" aria-label="Mois suivant"><i data-ico="chevR"></i></button></div>
+    <div class="rsinfo" id="rsInfo"></div>
+    <label class="check rsopt"><input type="checkbox" id="rsBud" checked><span>Le budget du mois<small>revenus, charges fixes, budgets par catégorie, marge, solde recalé</small></span></label>
+    <label class="check rsopt"><input type="checkbox" id="rsTx" checked><span>Toutes les opérations du mois<small>dépenses, rentrées d'argent, prélèvements confirmés</small></span></label>
+    <p class="small" style="margin:0 2px 14px">Les autres mois, vos projets, abonnements, remboursements et réglages ne sont pas touchés.</p>
+    <p class="err" id="rsErr"></p>
+    <button class="btn danger" id="rsGo"></button>
+    <button class="textbtn" id="rsBackup" style="display:block;margin:6px auto 0">Télécharger d'abord une sauvegarde</button>
   </div>
 </div>
 
@@ -1444,6 +1471,7 @@ function renderBudget(c, ready){
   $("bSetupMsg").textContent = c.ph === "current" ? "Pas encore de budget pour " + label(cur) + ". Il suffit de 2 minutes." : "Préparez à l'avance le budget de " + label(cur) + ".";
   $("bMain").hidden = !has;
   $("editBudget").hidden = !has; $("editBudget").disabled = !db || readOnly || !ready;
+  $("bReset").hidden = !(ready && db && !readOnly && (c.b || txs.length));
   if (!has) return;
   // budget du quotidien
   const lim = c.varBudget, sp = r2(c.varSpent - c.horsDep), over = lim > 0 && sp > lim + 0.004, near = !over && lim > 0 && sp >= .9 * lim;
@@ -2183,7 +2211,38 @@ function makeDb(uid){
   const colRef = path => ({path, doc:id => docRef(path + "/" + (id || newId())), get:() => readCol(path),
     onSnapshot:(next, err) => { const l = {kind:"col", path, next, err}; listeners.add(l); run(l); return () => listeners.delete(l); },
     add:async d => { const r = docRef(path + "/" + newId()); await r.set(d); return r; }});
-  return {doc:docRef, collection:colRef, refresh, flush, pending:() => outbox.length, isOnline:() => online && navigator.onLine,
+  // Un mois entier : en ligne, en une seule demande ; hors connexion, opération par opération (envoyées au retour du réseau)
+  async function removeMonth(ym, what){
+    const txPath = "months/" + ym + "/tx";
+    const slow = async () => {
+      if (what.tx){ const sn = await readCol(txPath).catch(() => ({docs:(cget(txPath) || []).map(([id]) => ({id}))})); for (const d of sn.docs) await writeDoc(txPath + "/" + d.id, null, "delete"); }
+      if (what.budget) await writeDoc("months/" + ym, null, "delete");
+    };
+    if (outbox.length || !navigator.onLine){ await slow(); return; }
+    try {
+      if (what.tx){ const {error} = await sb.from("transactions").delete().eq("ym", ym); if (error) fail(error); cset(txPath, []); }
+      if (what.budget){ const {error} = await sb.from("months").delete().eq("ym", ym); if (error) fail(error); applyLocal("months/" + ym, null, "delete"); }
+      setOnline(true);
+    } catch(e){ if (!isNet(e)) throw e; setOnline(false); await slow(); return; }
+    refreshSoon();
+  }
+  async function restoreMonth(ym, snap){
+    const txPath = "months/" + ym + "/tx", now = new Date().toISOString();
+    const slow = async () => {
+      if (snap.budget) await writeDoc("months/" + ym, snap.budget, "set");
+      for (const t of snap.txs || []){ const {id, ...d} = t; await writeDoc(txPath + "/" + id, d, "set"); }
+    };
+    if (outbox.length || !navigator.onLine){ await slow(); return; }
+    try {
+      if (snap.budget){ const {error} = await sb.from("months").upsert({user_id:uid, ym, data:snap.budget, updated_at:now}); if (error) fail(error); applyLocal("months/" + ym, snap.budget, "set"); }
+      const rows = (snap.txs || []).map(t => ({id:t.id, user_id:uid, ym, date:t.date, kind:t.kind === "rentree" ? "rentree" : "depense", line_id:String(t.lineId || ""), cat:String(t.cat || ""), label:String(t.label || ""), amount:Number(t.amount) || 0, ts:Number(t.ts) || Date.now()}));
+      for (let i = 0; i < rows.length; i += 400){ const {error} = await sb.from("transactions").upsert(rows.slice(i, i + 400)); if (error) fail(error); }
+      for (const t of snap.txs || []){ const {id, ...d} = t; applyLocal(txPath + "/" + id, d, "set"); }
+      setOnline(true);
+    } catch(e){ if (!isNet(e)) throw e; setOnline(false); await slow(); return; }
+    refreshSoon();
+  }
+  return {doc:docRef, collection:colRef, refresh, flush, removeMonth, restoreMonth, pending:() => outbox.length, isOnline:() => online && navigator.onLine,
     clearLocal:keepOutbox => { try { Object.keys(localStorage).filter(k => k.startsWith("cache:" + uid + ":") || (k === OB && !keepOutbox)).forEach(k => localStorage.removeItem(k)); } catch(e){} }};
 }
 /* Photos personnelles : stockage Supabase, dossier privé par personne */
@@ -3753,6 +3812,52 @@ if ("serviceWorker" in navigator){
   setTimeout(ask, 1500); setTimeout(ask, 6000);
 }
 
+/* ---------- réinitialiser un mois ---------- */
+let rsYm = null, rsArm = false, rsList = null, rsTok = 0;
+function openReset(ym){
+  if (!db || readOnly) return;
+  rsYm = ym || cur; $("rsBud").checked = true; $("rsTx").checked = true; $("rsErr").textContent = "";
+  $("toast").hidden = true; $("resetSheet").hidden = false; drawReset();
+}
+async function drawReset(){
+  rsArm = false; rsList = null; const ym = rsYm, tok = ++rsTok;
+  $("rsLabel").textContent = label(ym);
+  $("rsInfo").textContent = "Recherche des données de " + label(ym) + "…";
+  syncResetBtn();
+  try {
+    const list = await monthTxs(ym); if (tok !== rsTok) return;
+    rsList = list;
+    const b = months[ym], hasB = !!(b && Array.isArray(b.lines)), dep = r2(list.filter(t => t.kind !== "rentree").reduce((a, t) => a + (Number(t.amount) || 0), 0)), ren = r2(list.filter(t => t.kind === "rentree").reduce((a, t) => a + (Number(t.amount) || 0), 0));
+    const parts = [];
+    if (hasB) parts.push("son budget");
+    if (list.length) parts.push(`<b>${list.length} opération${list.length > 1 ? "s" : ""}</b> (${esc(e2(dep))} de dépenses${ren ? ", " + esc(e2(ren)) + " de rentrées" : ""})`);
+    $("rsInfo").innerHTML = parts.length ? `${esc(label(ym))} contient ${parts.join(" et ")}.` : `${esc(label(ym))} ne contient aucune donnée.`;
+  } catch(e){ if (tok === rsTok) $("rsInfo").textContent = errMsg(e); }
+  syncResetBtn();
+}
+function syncResetBtn(){
+  const b = months[rsYm], hasB = !!(b && Array.isArray(b.lines)), n = rsList ? rsList.length : 0;
+  const what = ($("rsBud").checked && hasB) || ($("rsTx").checked && n > 0);
+  $("rsGo").disabled = !rsList || !what;
+  $("rsGo").textContent = rsArm ? "Confirmer : supprimer définitivement" : "Supprimer les données de " + label(rsYm);
+  $("rsGo").classList.toggle("armed", rsArm);
+}
+async function doReset(){
+  if (!rsArm){ rsArm = true; syncResetBtn(); return; }
+  const ym = rsYm, b = months[ym], wantB = $("rsBud").checked && !!b, wantT = $("rsTx").checked && rsList && rsList.length > 0;
+  const snap = {budget:wantB ? JSON.parse(JSON.stringify(b)) : null, txs:wantT ? rsList.map(t => ({...t})) : []};
+  $("rsGo").disabled = true; $("rsErr").textContent = "";
+  try {
+    await db.removeMonth(ym, {budget:wantB, tx:wantT});
+    if (wantB){ const m = {...months}; delete m[ym]; months = m; }
+    if (wantT && lookRaw.autoSkip){ const sk = {}; for (const [k, v] of Object.entries(skipMap())) if (!k.includes(ym)) sk[k] = v; saveLook({autoSkip:sk}); }
+    hideSheet($("resetSheet"));
+    if (ym === cur && wantT) watchTx(); else render();
+    const what = wantB && wantT ? "Budget et opérations" : wantB ? "Budget" : "Opérations";
+    toast(what + " de " + label(ym) + " supprimés", async () => { await db.restoreMonth(ym, snap); if (snap.budget) months = {...months, [ym]:snap.budget}; if (ym === cur) watchTx(); else render(); toast(label(ym) + " remis comme avant"); }, "", "Annuler", 12000);
+  } catch(e){ $("rsErr").textContent = errMsg(e); $("rsGo").disabled = false; rsArm = false; syncResetBtn(); }
+}
+
 /* ---------- événements ---------- */
 $("prev").onclick = () => goMonth(-1);
 $("next").onclick = () => goMonth(1);
@@ -3812,7 +3917,7 @@ document.addEventListener("keydown", e => {
   if (isLocked()) return;
   if (!$("pinSheet").hidden) closeSheet("pinSheet");
   if (!$("rfEditSheet").hidden){ $("rfEditSheet").hidden = true; return; }
-  ["setup","photos","account","projSheet","moveSheet","subEdit","subsSheet","legal","recap","refSheet"].forEach(id => { $(id).hidden = true; });
+  ["setup","photos","account","projSheet","moveSheet","subEdit","subsSheet","legal","recap","refSheet","resetSheet"].forEach(id => { $(id).hidden = true; });
   if (!$("onb").hidden) endOnb(false);
 });
 document.querySelector(".wrap").addEventListener("click", e => {
@@ -3898,6 +4003,16 @@ document.querySelector(".wrap").addEventListener("keydown", e => {
   const li = e.target.closest("li[data-cat], li[data-opscat], li[data-due]"); if (!li) return;
   e.preventDefault(); li.click();
 });
+
+/* événements v5.1 */
+$("bReset").onclick = () => openReset(cur);
+$("acReset").onclick = () => openReset(cur);
+$("rsPrev").onclick = () => { rsYm = shift(rsYm, -1); drawReset(); };
+$("rsNext").onclick = () => { rsYm = shift(rsYm, 1); drawReset(); };
+$("rsBud").addEventListener("change", () => { rsArm = false; syncResetBtn(); });
+$("rsTx").addEventListener("change", () => { rsArm = false; syncResetBtn(); });
+$("rsGo").onclick = doReset;
+$("rsBackup").onclick = () => { hideSheet($("resetSheet")); openAccount(); setTimeout(() => { const el = $("bkSave"); if (el) el.scrollIntoView({block:"center"}); }, 120); };
 
 /* événements v5 */
 $("helpBtn").onclick = () => setHelp(!helpOn());

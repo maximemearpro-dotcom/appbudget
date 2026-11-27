@@ -7,6 +7,7 @@ Chaque personne crée son compte et ne voit que ses propres données.
 
 - Budget du mois : revenus, charges fixes (avec jour de prélèvement), budgets par poste, objectif d'épargne, marge de sécurité.
 - Version 5 : en-tête compact hors de l'Accueil, onglet Budget en sections repliables, explications masquées après une semaine (bouton « ? »), gestes (glisser pour changer de mois, glisser une opération pour la supprimer, tirer une fenêtre vers le bas pour la fermer), animations douces, ouverture instantanée avec les chiffres gardés sur l'appareil et message « nouvelle version prête », saisie éclair (dépenses fréquentes, magasin → catégorie retenu, lien `#ajouter?montant=…&categorie=…&libelle=…` pour un raccourci Siri), bilan du mois, report des restes (sur le mois suivant ou en épargne), remboursements entre amis.
+- Version 5.1 : « Réinitialiser un mois » (Réglages, ou en bas de l'onglet Budget) : supprime le budget et/ou les opérations du mois choisi, avec double confirmation et « Annuler ».
 - Prélèvements automatiques (version 4) : le jour d'un prélèvement, d'un abonnement ou d'un revenu prévu, l'opération est proposée « À confirmer » sur l'Accueil (un toucher), ou créée toute seule en mode automatique.
 - Saisie rapide d'une dépense (montant, catégorie, date), saisie express en une phrase (« courses 23,50 carrefour »), dictée quand le navigateur la permet.
 - Photo d'un ticket de caisse lue directement sur le téléphone (version 4) : montant, date, enseigne et catégorie proposés. Aucune photo n'est envoyée.

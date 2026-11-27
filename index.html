@@ -781,7 +781,7 @@ label.ibtn{cursor:pointer;-webkit-tap-highlight-color:transparent}
       <button class="btn danger" id="acDelete">Supprimer mon compte et mes données</button>
       <p class="err" id="acErr" style="margin-top:8px"></p>
     </div>
-    <p class="foot center">Mon budget · version 4.1</p>
+    <p class="foot center">Mon budget · version 4.2</p>
   </div>
 </div>
 
@@ -2499,6 +2499,252 @@ async function deleteSub(){
   catch(e){ $("seErr").textContent = errMsg(e); $("seDel").disabled = false; }
 }
 
+/* ---------- lecture des tickets : préparation de la photo et analyse du texte (tout reste sur l'appareil) ---------- */
+const OCR_TARGET_W = 1700;          // largeur visée pour le ticket redressé (en pixels)
+const OCR_PARAMS = {tessedit_pageseg_mode:"6", preserve_interword_spaces:"1", user_defined_dpi:"300"};
+function ocrCanvas(w, h){ const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(w)); c.height = Math.max(1, Math.round(h)); return c; }
+function ocrFree(...cs){ for (const c of cs) if (c){ c.width = 0; c.height = 0; } } // libère la mémoire tout de suite (important sur iPhone)
+function ocrLoad(blob){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(blob), im = new Image();
+    im.onload = () => res({im, url});
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error("photo illisible")); };
+    im.src = url;
+  });
+}
+function ocrIntegral(g, w, h){
+  const W1 = w + 1, I = new Uint32Array(W1 * (h + 1));
+  for (let y = 0; y < h; y++){ let row = 0; const o = (y + 1) * W1, p = y * W1, q = y * w; for (let x = 0; x < w; x++){ row += g[q + x]; I[o + x + 1] = I[p + x + 1] + row; } }
+  return I;
+}
+function ocrOtsu(v){
+  const hist = new Uint32Array(256); for (let i = 0; i < v.length; i++) hist[v[i]]++;
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sB = 0, wB = 0, best = -1, T = 128; const N = v.length;
+  for (let t = 0; t < 256; t++){ wB += hist[t]; if (!wB) continue; const wF = N - wB; if (!wF) break; sB += t * hist[t]; const mB = sB / wB, mF = (sum - sB) / wF, s = wB * wF * (mB - mF) * (mB - mF); if (s > best){ best = s; T = t; } }
+  return T;
+}
+// Repère le ticket (zone claire et peu colorée d'un seul tenant) et son intérieur (écritures comprises).
+function ocrPaper(white, w, h){
+  const N = w * h, T = ocrOtsu(white), lab = new Int32Array(N), st = new Int32Array(N);
+  let cur = 0, bestLab = 0, bestSize = 0;
+  for (let s = 0; s < N; s++){
+    if (lab[s] || white[s] <= T) continue;
+    cur++; let sp = 0, size = 0; st[sp++] = s; lab[s] = cur;
+    while (sp){
+      const p = st[--sp], x = p % w; size++;
+      if (x > 0 && !lab[p - 1] && white[p - 1] > T){ lab[p - 1] = cur; st[sp++] = p - 1; }
+      if (x < w - 1 && !lab[p + 1] && white[p + 1] > T){ lab[p + 1] = cur; st[sp++] = p + 1; }
+      if (p >= w && !lab[p - w] && white[p - w] > T){ lab[p - w] = cur; st[sp++] = p - w; }
+      if (p < N - w && !lab[p + w] && white[p + w] > T){ lab[p + w] = cur; st[sp++] = p + w; }
+    }
+    if (size > bestSize){ bestSize = size; bestLab = cur; }
+  }
+  if (bestSize < N * .06) return null;
+  // dehors = joignable depuis le bord de la photo sans traverser le papier
+  const out = new Uint8Array(N); let sp = 0;
+  const push = p => { if (!out[p] && lab[p] !== bestLab){ out[p] = 1; st[sp++] = p; } };
+  for (let x = 0; x < w; x++){ push(x); push(N - w + x); }
+  for (let y = 0; y < h; y++){ push(y * w); push(y * w + w - 1); }
+  while (sp){ const p = st[--sp], x = p % w; if (x > 0) push(p - 1); if (x < w - 1) push(p + 1); if (p >= w) push(p - w); if (p < N - w) push(p + w); }
+  let x0 = w, y0 = h, x1 = 0, y1 = 0, n = 0;
+  for (let p = 0; p < N; p++) if (!out[p]){ n++; const x = p % w, y = (p / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (n < N * .06) return null;
+  return {out, x0, y0, x1:x1 + 1, y1:y1 + 1};
+}
+// Angle des lignes d'écriture (en radians) : on cherche l'inclinaison qui « aligne » le mieux les points d'encre.
+function ocrSkew(g, w, h, box, out){
+  const I = ocrIntegral(g, w, h), W1 = w + 1, r = Math.max(3, Math.round(Math.min(box.x1 - box.x0, box.y1 - box.y0) / 40));
+  const xs = [], ys = [];
+  for (let y = box.y0; y < box.y1; y++){
+    const ya = Math.max(0, y - r), yb = Math.min(h, y + r + 1);
+    for (let x = box.x0; x < box.x1; x++){
+      const p = y * w + x; if (out && out[p]) continue;
+      const xa = Math.max(0, x - r), xb = Math.min(w, x + r + 1);
+      const m = (I[yb * W1 + xb] - I[ya * W1 + xb] - I[yb * W1 + xa] + I[ya * W1 + xa]) / ((xb - xa) * (yb - ya));
+      if (g[p] < m * .8){ xs.push(x); ys.push(y); }
+    }
+  }
+  if (xs.length < 200) return 0;
+  const step = Math.max(1, Math.floor(xs.length / 40000)), D = w + h, bins = new Int32Array(2 * D + 2);
+  const score = a => {
+    bins.fill(0); const c = Math.cos(a), s = Math.sin(a); let tot = 0;
+    for (let i = 0; i < xs.length; i += step){ const k = Math.round(ys[i] * c - xs[i] * s) + D; bins[k]++; }
+    for (let i = 0; i < bins.length; i++) tot += bins[i] * bins[i];
+    return tot;
+  };
+  let best = 0, bs = -1;
+  for (let d = -15; d <= 15; d += 1){ const v = score(d * Math.PI / 180); if (v > bs){ bs = v; best = d; } }
+  let fine = best;
+  for (let d = best - 1; d <= best + 1.0001; d += .1){ const v = score(d * Math.PI / 180); if (v > bs){ bs = v; fine = d; } }
+  return fine * Math.PI / 180;
+}
+// Photo -> ticket recadré, redressé, ombres effacées, encre bien noire sur fond blanc.
+async function ocrPrepare(blob, opts){
+  const MASK = (opts && opts.mask) || "none";
+  const {im, url} = await ocrLoad(blob);
+  const cvs = [];
+  try {
+    const IW = im.naturalWidth, IH = im.naturalHeight;
+    // 1. analyse sur une petite copie
+    const k = Math.min(1, 900 / Math.max(IW, IH)), aw = Math.max(1, Math.round(IW * k)), ah = Math.max(1, Math.round(IH * k));
+    const A = ocrCanvas(aw, ah); cvs.push(A);
+    const ax = A.getContext("2d", {willReadFrequently:true}); ax.drawImage(im, 0, 0, aw, ah);
+    const ad = ax.getImageData(0, 0, aw, ah).data, g = new Uint8Array(aw * ah), white = new Uint8Array(aw * ah);
+    for (let i = 0, j = 0; j < g.length; i += 4, j++){ const R = ad[i], G = ad[i + 1], B = ad[i + 2]; g[j] = (R * 77 + G * 150 + B * 29) >> 8; white[j] = Math.min(R, G, B); }
+    let paper = ocrPaper(white, aw, ah);
+    if (paper && (paper.x1 - paper.x0) * (paper.y1 - paper.y0) > aw * ah * .97) paper.whole = true;
+    const box = paper ? paper : {x0:0, y0:0, x1:aw, y1:ah};
+    const ang = ocrSkew(g, aw, ah, box, paper && paper.out);
+    // 2. ticket en grand, redressé
+    const mg = MASK === "exact" ? .02 : .05, mx = (box.x1 - box.x0) * mg, my = (box.y1 - box.y0) * mg;
+    const bx0 = Math.max(0, box.x0 - mx) / k, by0 = Math.max(0, box.y0 - my) / k, bx1 = Math.min(aw, box.x1 + mx) / k, by1 = Math.min(ah, box.y1 + my) / k;
+    const cw = bx1 - bx0, ch = by1 - by0, cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
+    let s = Math.min(2.5, ((opts && opts.target) || OCR_TARGET_W) / cw); if (cw * ch * s * s > 7e6) s = Math.sqrt(7e6 / (cw * ch));
+    const ow = Math.round(cw * s), oh = Math.round(ch * s);
+    const O = ocrCanvas(ow, oh); cvs.push(O);
+    const ox = O.getContext("2d", {willReadFrequently:true});
+    ox.fillStyle = "#fff"; ox.fillRect(0, 0, ow, oh);
+    const place = (c, sc) => { c.setTransform(1, 0, 0, 1, 0, 0); c.translate(ow / 2, oh / 2); c.rotate(-ang); c.scale(sc, sc); };
+    place(ox, s); ox.translate(-cx, -cy); ox.imageSmoothingQuality = "high"; ox.drawImage(im, 0, 0);
+    ox.setTransform(1, 0, 0, 1, 0, 0);
+    // masque « hors du ticket », transformé de la même façon
+    let M = null;
+    if (paper && !paper.whole && MASK === "dilate"){
+      // une ombre peut faire passer un bord du ticket pour la table : on élargit nettement la zone gardée
+      const rd = Math.max(3, Math.round(Math.min(box.x1 - box.x0, box.y1 - box.y0) * .08)), ins = new Uint8Array(aw * ah);
+      for (let q = 0; q < ins.length; q++) ins[q] = paper.out[q] ? 0 : 1;
+      const II = ocrIntegral(ins, aw, ah), W2 = aw + 1;
+      for (let y = 0; y < ah; y++){ const ya = Math.max(0, y - rd), yb = Math.min(ah, y + rd + 1); for (let x = 0; x < aw; x++){ const q = y * aw + x; if (!paper.out[q]) continue; const xa = Math.max(0, x - rd), xb = Math.min(aw, x + rd + 1); if (II[yb * W2 + xb] - II[ya * W2 + xb] - II[yb * W2 + xa] + II[ya * W2 + xa] > 0) paper.out[q] = 2; } }
+      for (let q = 0; q < ins.length; q++) if (paper.out[q] === 2) paper.out[q] = 0;
+    }
+    if (paper && !paper.whole && MASK !== "none"){
+      const mk = ocrCanvas(aw, ah); cvs.push(mk);
+      const mc = mk.getContext("2d"), md = mc.createImageData(aw, ah);
+      for (let p = 0, i = 0; p < paper.out.length; p++, i += 4){ const v = paper.out[p] ? 0 : 255; md.data[i] = md.data[i + 1] = md.data[i + 2] = v; md.data[i + 3] = 255; }
+      mc.putImageData(md, 0, 0);
+      const MO = ocrCanvas(ow, oh); cvs.push(MO);
+      const moc = MO.getContext("2d", {willReadFrequently:true});
+      place(moc, s / k); moc.translate(-cx * k, -cy * k); moc.drawImage(mk, 0, 0);
+      M = moc.getImageData(0, 0, ow, oh).data;
+    }
+    // 3. ombres effacées puis encre noire / fond blanc (seuil qui s'adapte à l'éclairage local)
+    const od = ox.getImageData(0, 0, ow, oh), d = od.data, G = new Uint8Array(ow * oh);
+    for (let i = 0, j = 0; j < G.length; i += 4, j++) G[j] = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+    const I = ocrIntegral(G, ow, oh), W1 = ow + 1, r = Math.max(12, Math.round(ow / 28));
+    for (let y = 0; y < oh; y++){
+      const ya = Math.max(0, y - r), yb = Math.min(oh, y + r + 1);
+      for (let x = 0; x < ow; x++){
+        const j = y * ow + x, i = j * 4;
+        let v = 255;
+        if (!M || M[i] > 127){
+          const xa = Math.max(0, x - r), xb = Math.min(ow, x + r + 1);
+          const m = (I[yb * W1 + xb] - I[ya * W1 + xb] - I[yb * W1 + xa] + I[ya * W1 + xa]) / ((xb - xa) * (yb - ya));
+          v = G[j] < m * .84 && G[j] < m - 10 ? 0 : 255;
+        }
+        d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+      }
+    }
+    ox.putImageData(od, 0, 0);
+    cvs.splice(cvs.indexOf(O), 1);
+    return O;
+  } finally { URL.revokeObjectURL(url); ocrFree(...cvs); }
+}
+
+/* ---------- analyse du texte lu ---------- */
+const STORES = [
+  ["cart", ["carrefour", "leclerc", "auchan", "lidl", "aldi", "intermarche", "super u", "hyper u", "systeme u", "u express", "monoprix", "franprix", "casino", "picard", "netto", "grand frais", "biocoop", "naturalia", "cora", "spar", "leader price", "match", "epicerie", "boulangerie", "marche"]],
+  ["fuel", ["totalenergies", "total access", "esso", "station", "carburant", "gazole", "sp95", "sp98", "avia", "shell", "bp", "peage", "parking", "vinci autoroutes", "aprr", "sanef"]],
+  ["food", ["mcdonald", "burger king", "kfc", "quick", "subway", "domino", "pizza", "starbucks", "brioche doree", "paul", "restaurant", "brasserie", "bistro", "bistrot", "cafe", "creperie", "sushi", "kebab"]],
+  ["health", ["pharmacie", "parapharmacie", "opticien", "laboratoire"]],
+  ["bag", ["zara", "h&m", "kiabi", "primark", "uniqlo", "celio", "jules", "sephora", "nocibe", "galeries lafayette", "printemps", "decathlon", "action", "gemo"]],
+  ["sofa", ["ikea", "leroy merlin", "castorama", "brico", "maisons du monde", "conforama", "but", "gifi", "foir'fouille"]],
+  ["book", ["fnac", "cultura", "librairie", "darty", "boulanger"]],
+  ["bus", ["sncf", "ratp", "tisseo", "tcl", "ter", "ouigo", "blablacar"]],
+  ["paw", ["animalerie", "veterinaire", "truffaut", "jardiland"]]];
+const GENERIC_SHOP = /^(station|carburant|gazole|sp9|peage|parking|restaurant|brasserie|bistro|cafe|epicerie|boulangerie|marche|pharmacie|parapharmacie|opticien|laboratoire|librairie|animalerie|veterinaire)/;
+// mots-clés lus « avec indulgence » (0/O, 1/l/I souvent confondus par la lecture)
+const kwOf = s => " " + norm(s).replace(/0/g, "o").replace(/[1|!]/g, "l").replace(/[^a-z0-9%&'\/ ]+/g, " ").replace(/\s+/g, " ") + " ";
+const K_STRONG = /net\s*a?\s*pay|tota[l1i]?\s*(ttc|a\s*pay|du|general|eur|euros?)\b|\ba\s*pay[e3]r|montant\s*(ttc|a\s*pay|du|total|regle)|total\s*cb/;
+const K_TOTAL = /\bt[o]t[a]?[l]\b|\btota[l]?\b|\btotal/;
+const K_PAY = /montant|paiement|payement|reglement|\bregle\b|debit/;
+const K_CARD = /\bcb\b|\bc b\b|carte|visa|mastercard|maestro|sans contact|especes|cheque|ticket resto|titre resto/;
+const K_BAD = /sous\s*-?\s*tota|s\s*\/\s*tota|\btva\b|\bht\b|base\s*ht|\btaux\b|rendu|monnaie|remise|economi|fidelit|cagnotte|\bpoints?\b|avoir|bon d.?achat|\/\s*kg|\/\s*l\b|prix\s*unit|quantite|\bqte\b|couverts?|acompte|pourboire/;
+function fixDigits(s){
+  return String(s).replace(/(\d)\s*[oO]/g, (_, d) => d + "0").replace(/[oO](?=\s?\d)/g, "0").replace(/(\d)[lI|](?=\d)/g, (_, d) => d + "1").replace(/€/g, " ");
+}
+function amountsIn(line){
+  const out = [], s = fixDigits(line), re = /(\d{1,3}(?:[ .  ]\d{3})+|\d{1,6})\s?[,.]\s?(\d{2})(?!\d)/g; let m;
+  while ((m = re.exec(s))){
+    const before = s.slice(Math.max(0, m.index - 1), m.index), after = s.slice(m.index + m[0].length, m.index + m[0].length + 3);
+    if (/[\d\/:,.]/.test(before) || /^[.,\/:\-]\d/.test(after) || /^\s?%/.test(after) || /^\s?(l|kg|g)\b/i.test(after)) continue; // dates, heures, %, quantités
+    const v = Number(m[1].replace(/[ .  ]/g, "") + "." + m[2]);
+    if (v > 0 && v < 20000) out.push(v);
+  }
+  return out;
+}
+function parseReceipt(raw){
+  const lines = String(raw || "").split(/\r?\n/).map(s => s.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const kws = lines.map(kwOf), ams = lines.map(amountsIn), n = lines.length;
+  const cents = v => Math.round(v * 100), score = new Map(), occ = new Map();
+  ams.forEach(a => a.forEach(v => occ.set(cents(v), (occ.get(cents(v)) || 0) + 1)));
+  const add = (v, w) => score.set(cents(v), (score.get(cents(v)) || 0) + w);
+  let firstKey = n;
+  for (let i = 0; i < n; i++){
+    const kw = kws[i]; if (K_BAD.test(kw)) continue;
+    const w = K_STRONG.test(kw) ? 10 : K_TOTAL.test(kw) ? 8 : K_PAY.test(kw) ? 6 : K_CARD.test(kw) ? 5 : 0;
+    if (!w) continue;
+    if (w >= 8 && i < firstKey) firstKey = i;
+    if (ams[i].length) add(ams[i][ams[i].length - 1], w);
+    else for (let j = i + 1; j <= i + 2 && j < n; j++){ if (ams[j].length && !K_BAD.test(kws[j])){ add(ams[j][0], w - 3); break; } } // montant passé à la ligne suivante
+  }
+  // les articles (avant la ligne du total) : leur somme et le plus cher
+  let sum = 0, maxItem = 0;
+  for (let i = Math.min(3, n); i < firstKey; i++) if (ams[i].length && !K_BAD.test(kws[i]) && !/\d\s*x\s*\d|\bx\s*\d/.test(kws[i])){ const v = ams[i][ams[i].length - 1]; sum += v; if (v > maxItem) maxItem = v; }
+  if (sum > 0){ const cs = cents(sum); for (let i = firstKey; i < n; i++) if (!K_BAD.test(kws[i]) && ams[i].some(v => Math.abs(cents(v) - cs) <= 1)){ if (!score.has(cs)) score.set(cs, 0); break; } }
+  let best = null, bs = -1e9;
+  for (const [c, sc0] of score){
+    let sc = sc0 + Math.min(3, (occ.get(c) || 1) - 1) * 2;
+    if (sum > 0 && Math.abs(c - cents(sum)) <= 1) sc += 9;
+    if (maxItem && c < cents(maxItem) - 1) sc -= 6;
+    if (sc > bs || (sc === bs && c > best)){ bs = sc; best = c; }
+  }
+  let sure = bs >= 10;
+  if (best === null){
+    // aucun mot-clé lu : le montant le plus répété, sinon le plus grand
+    let bo = 0;
+    for (const [c, o] of occ) if (o > bo || (o === bo && c > best)){ bo = o; best = c; }
+    if (bo < 2){ best = null; for (let i = 0; i < n; i++) if (!K_BAD.test(kws[i])) for (const v of ams[i]) if (best === null || cents(v) > best) best = cents(v); }
+    sure = false;
+  }
+  // date
+  let date = null; const now = new Date();
+  const dre = /\b(\d{1,2})\s?[\/.\-]\s?(\d{1,2})\s?[\/.\-]\s?(\d{4}|\d{2})(?!\d)/g; let dm;
+  const flat = fixDigits(lines.join("\n"));
+  // un « 0 » est souvent lu « 6 » : une date impossible (68/11, 13/61, 2626) est corrigée
+  const z = (t, max) => Number(t) <= max ? t : t.replace("6", "0");
+  while (!date && (dm = dre.exec(flat))){
+    const dd = Number(z(dm[1], 31)), mm = Number(z(dm[2], 12));
+    let ys = dm[3]; if (ys.length === 4 && !/^20/.test(ys)) ys = ys.replace(/^2[6o]/i, "20");
+    let y = Number(ys); if (y < 100) y += 2000;
+    const d = new Date(y, mm - 1, dd, 12);
+    if (!isNaN(d) && d.getMonth() === mm - 1 && d.getDate() === dd && (now - d) / 864e5 < 120 && d <= new Date(Date.now() + 864e5)) date = isoDay(d);
+  }
+  // enseigne (en haut du ticket) et type de commerce
+  const head = " " + lines.slice(0, 7).map(l => norm(l)).join(" ").replace(/[^a-z0-9&'+ ]+/g, " ").replace(/\s+/g, " ") + " ";
+  let shop = null, hint = null;
+  for (const [ic, names] of STORES){
+    const hit = names.find(nm => head.includes(" " + nm + (nm.length <= 4 ? " " : "")));
+    if (hit){ hint = ic; if (!GENERIC_SHOP.test(hit)) shop = hit; break; }
+  }
+  if (!shop){
+    const first = lines.slice(0, 6).find(l => { const letters = (l.match(/[A-Za-zÀ-ÿ]/g) || []).length; return letters >= 4 && letters / l.replace(/\s/g, "").length > .7 && !/(ticket|caisse|bienvenue|merci|siret|siren|t[eé]l|www|http|facture|client|date|table)/i.test(l); });
+    if (first) shop = first;
+  }
+  if (shop) shop = shop.replace(/[^A-Za-zÀ-ÿ0-9&' .\-]/g, "").trim().slice(0, 40).toLowerCase().replace(/(^|[\s\-'.])\S/g, x => x.toUpperCase());
+  return {amount:best !== null ? best / 100 : null, sure, date, shop:shop || null, hint};
+}
+
 /* ---------- réseau : hors connexion ---------- */
 const isNet = e => !navigator.onLine || /failed to fetch|load failed|networkerror|network request failed|fetch failed|err_internet|err_network/i.test(String(e && e.message || ""));
 function netChanged(){
@@ -2850,43 +3096,10 @@ async function getOcr(progress){
     if (!window.Tesseract) await loadScript("vendor/ocr/tesseract.min.js");
     const base = new URL("vendor/ocr/", location.href).href;
     const w = await Tesseract.createWorker("fra", 1, {workerPath:base + "worker.min.js", corePath:base + "core", langPath:base + "lang", workerBlobURL:false, logger:m => { if (ocrProgress) ocrProgress(m); }});
+    await w.setParameters(OCR_PARAMS);
     ocrWorker = w; return w;
   })().catch(e => { ocrLoading = null; throw e; });
   return ocrLoading;
-}
-const STORES = [
-  ["cart", ["carrefour", "leclerc", "auchan", "lidl", "aldi", "intermarche", "super u", "hyper u", "systeme u", "monoprix", "franprix", "casino", "picard", "netto", "grand frais", "biocoop", "naturalia", "cora", "spar", "leader price", "match", "u express", "epicerie", "boulangerie", "marche"]],
-  ["fuel", ["totalenergies", "total access", "esso", "station", "carburant", "gazole", "sp95", "sp98", "avia", "shell", "bp", "peage", "parking", "vinci autoroutes", "aprr", "sanef"]],
-  ["food", ["mcdonald", "burger king", "kfc", "quick", "subway", "domino", "pizza", "starbucks", "brioche doree", "paul ", "restaurant", "brasserie", "bistro", "cafe", "creperie", "sushi", "kebab", "boulangerie patisserie"]],
-  ["health", ["pharmacie", "parapharmacie", "opticien", "laboratoire"]],
-  ["bag", ["zara", "h&m", "kiabi", "primark", "uniqlo", "celio", "jules", "sephora", "nocibe", "galeries lafayette", "printemps", "decathlon", "action", "gemo"]],
-  ["sofa", ["ikea", "leroy merlin", "castorama", "brico", "maisons du monde", "conforama", "but ", "gifi", "foir'fouille"]],
-  ["book", ["fnac", "cultura", "librairie", "darty", "boulanger"]],
-  ["bus", ["sncf", "ratp", "tisseo", "tcl", "ter ", "ouigo", "blablacar"]],
-  ["paw", ["animalerie", "veterinaire", "truffaut", "jardiland"]]];
-function parseReceipt(raw){
-  const lines = String(raw || "").split(/\r?\n/).map(s => s.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const head = " " + norm(lines.slice(0, 7).join(" ")).replace(/[^a-z0-9&'+ ]+/g, " ").replace(/\s+/g, " ") + " "; // l'enseigne est en haut du ticket
-  const vals = s => { const out = [], re = /(\d{1,5}(?:[ .]\d{3})*)\s?[,.]\s?(\d{2})(?!\d)/g; let m; while ((m = re.exec(s))){ const v = Number(m[1].replace(/[ .]/g, "") + "." + m[2]); if (v > 0 && v < 100000) out.push(v); } return out; };
-  const BAD = /(sous[\s-]?total|tva|\bht\b|rendu|monnaie|remise|economie|économie|fid[eé]lit|cagnotte|points?\b|avoir)/i;
-  const KEYS = [/net\s*[aà]\s*payer/i, /total\s*(ttc|[aà] payer|carte|cb)/i, /[aà]\s*payer/i, /montant\s*(ttc|d[uû]|r[eé]gl[eé]|cb|carte)/i, /\btotal\b/i, /\b(cb|carte bancaire|visa|mastercard|paiement)\b/i, /\bmontant\b/i];
-  let amount = null;
-  for (const re of KEYS){
-    for (let i = 0; i < lines.length && amount === null; i++){
-      if (!re.test(lines[i]) || BAD.test(lines[i])) continue;
-      const v = vals(lines[i]); if (v.length) amount = v[v.length - 1]; else if (lines[i + 1]){ const v2 = vals(lines[i + 1]); if (v2.length) amount = v2[0]; }
-    }
-    if (amount !== null) break;
-  }
-  if (amount === null){ const all = lines.filter(l => !BAD.test(l)).flatMap(vals); if (all.length) amount = Math.max(...all); }
-  let date = null;
-  const dm = String(raw || "").match(/\b(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})\b/);
-  if (dm){ let y = Number(dm[3]); if (y < 100) y += 2000; const d = new Date(y, Number(dm[2]) - 1, Number(dm[1]), 12); if (!isNaN(d) && d.getMonth() === Number(dm[2]) - 1 && Math.abs(d - new Date()) / 864e5 < 120 && d <= new Date(Date.now() + 864e5)) date = isoDay(d); }
-  let shop = null, hint = null;
-  for (const [ic, names] of STORES){ const hit = names.find(n => { const k = n.trim(); return head.includes(" " + k + (k.length <= 4 ? " " : "")); }); if (hit){ hint = ic; if (!/^(station|carburant|gazole|sp9|peage|parking|restaurant|brasserie|bistro|cafe|epicerie|boulangerie|marche|pharmacie|parapharmacie|opticien|laboratoire|librairie|animalerie|veterinaire)/.test(hit)) shop = hit.trim(); break; } }
-  if (!shop){ const first = lines.slice(0, 6).find(l => /[A-Za-zÀ-ÿ]{3,}/.test(l) && !/\d{3,}/.test(l) && !/(ticket|caisse|bienvenue|merci|siret|siren|t[eé]l|www|http|facture|client)/i.test(l)); if (first) shop = first; }
-  if (shop) shop = shop.replace(/[^A-Za-zÀ-ÿ0-9&' .\-]/g, "").trim().slice(0, 40).toLowerCase().replace(/(^|[\s\-'])\S/g, x => x.toUpperCase());
-  return {amount:amount !== null ? r2(amount) : null, date, shop:shop || null, hint};
 }
 function guessCat(r){
   const cats = catsFor("depense");
@@ -2894,41 +3107,19 @@ function guessCat(r){
   if (r.shop){ const n = norm(r.shop); const c = cats.find(x => norm(x.name).split(/[^a-z]+/).some(w => w.length > 3 && n.includes(w))); if (c) return c; }
   return null;
 }
-// noir et blanc + contraste renforcé : la lecture est bien plus fiable sur un ticket photographié
-function prepOcr(blob){
-  return new Promise(res => {
-    const url = URL.createObjectURL(blob), im = new Image();
-    im.onload = () => {
-      try {
-        const W = im.naturalWidth, H = im.naturalHeight, k = Math.max(W, H) < 1400 ? 1400 / Math.max(W, H) : 1, cv = document.createElement("canvas");
-        cv.width = Math.round(W * k); cv.height = Math.round(H * k);
-        const x = cv.getContext("2d", {willReadFrequently:true}); x.drawImage(im, 0, 0, cv.width, cv.height);
-        const d = x.getImageData(0, 0, cv.width, cv.height), p = d.data, hist = new Uint32Array(256), n = p.length / 4;
-        for (let i = 0; i < p.length; i += 4){ const g = (p[i] * 299 + p[i + 1] * 587 + p[i + 2] * 114) / 1000 | 0; p[i] = g; hist[g]++; }
-        let lo = 0, hi = 255, acc = 0;
-        for (let v = 0; v < 256; v++){ acc += hist[v]; if (acc > n * .01){ lo = v; break; } }
-        acc = 0; for (let v = 255; v >= 0; v--){ acc += hist[v]; if (acc > n * .01){ hi = v; break; } }
-        const sc = 255 / Math.max(1, hi - lo);
-        for (let i = 0; i < p.length; i += 4){ const g = Math.max(0, Math.min(255, (p[i] - lo) * sc)); p[i] = p[i + 1] = p[i + 2] = g; }
-        x.putImageData(d, 0, 0); URL.revokeObjectURL(url); res(cv);
-      } catch(e){ URL.revokeObjectURL(url); res(blob); }
-    };
-    im.onerror = () => { URL.revokeObjectURL(url); res(blob); };
-    im.src = url;
-  });
-}
 async function readTicket(file){
   const tok = {}; photoTok = tok;
   $("aErr").textContent = ""; setCamBusy(true); $("aSpin").hidden = false; $("aHeard").textContent = "Préparation de la photo…";
   try {
-    const blob = await shrink(file, 2000, .92); if (photoTok !== tok) return; setThumb(blob);
+    const thumb = await shrink(file, 600, .8); if (photoTok !== tok) return; setThumb(thumb);
     const w = await getOcr(m => {
       if (photoTok !== tok || !m) return;
       const pct = Math.round((m.progress || 0) * 100);
       $("aHeard").textContent = m.status === "recognizing text" ? "Lecture du ticket… " + pct + " %" : "Préparation du lecteur (la première fois seulement)… " + pct + " %";
     });
-    const img = await prepOcr(blob); if (photoTok !== tok) return;
-    const res = await w.recognize(img);
+    $("aHeard").textContent = "Redressement du ticket…";
+    const img = await ocrPrepare(file); if (photoTok !== tok){ ocrFree(img); return; }
+    let res; try { res = await w.recognize(img); } finally { ocrFree(img); }
     if (photoTok !== tok) return;
     applyTicket(parseReceipt(res && res.data ? res.data.text : ""));
   } catch(e){
@@ -2947,7 +3138,7 @@ function applyTicket(r){
   drawChips(false);
   if (!r.amount){ $("aHeard").textContent = "Je n'ai pas trouvé le total : saisissez-le à la main" + (r.shop ? " (commerce lu : " + r.shop + ")." : "."); return; }
   const parts = [e2(r.amount), cat ? cat.name : "catégorie à choisir"]; if (r.shop) parts.push(r.shop); if (dTxt) parts.push(dTxt);
-  $("aHeard").textContent = "Ticket lu : " + parts.join(" · ") + " — vérifiez, puis enregistrez.";
+  $("aHeard").textContent = (r.sure ? "Ticket lu : " : "Ticket lu, total à vérifier : ") + parts.join(" · ") + " — vérifiez, puis enregistrez.";
 }
 
 /* ---------- événements ---------- */
